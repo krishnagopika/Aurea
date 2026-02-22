@@ -61,6 +61,15 @@ jobs:
               sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             fi
 
+            # Install Docker Buildx plugin >= 0.17.0 (required by compose build)
+            echo "Installing Docker Buildx..."
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            sudo curl -SL "https://github.com/docker/buildx/releases/latest/download/buildx-$(curl -s https://api.github.com/repos/docker/buildx/releases/latest | grep tag_name | cut -d'"' -f4).linux-amd64" \
+                 -o /usr/local/lib/docker/cli-plugins/docker-buildx
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+            sudo docker buildx install
+            echo "Buildx: $(sudo docker buildx version)"
+
             echo "Docker: $(sudo docker --version)"
             echo "Compose: $(sudo docker compose version)"
 
