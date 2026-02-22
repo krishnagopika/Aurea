@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     JWT_EXPIRY_MINUTES: int = 60
 
     # ── External APIs ─────────────────────────────────────────────────────────
-    IBEX_API_URL: str = "https://api.ibex.co.uk"
+    IBEX_API_URL: str = "https://ibex.seractech.co.uk"
     IBEX_API_KEY: str = ""
     EPC_API_URL: str = "https://epc.opendatacommunities.org"
     EPC_API_KEY: str = ""

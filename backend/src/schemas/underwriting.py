@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Any
+from typing import List, Any, Optional
 
 
 class AssessmentRequest(BaseModel):
@@ -45,6 +45,7 @@ class AssessmentResponse(BaseModel):
     risk_factors: List[Any] = []
     plain_english_narrative: str = ""
     data_warnings: List[str] = []
+    property_details: Optional[dict] = None  # EPC-sourced property info for display
 
     model_config = {
         "json_schema_extra": {

@@ -1,11 +1,29 @@
 from fastapi import APIRouter, Depends, Body
+from fastapi.responses import StreamingResponse
 from typing import List
 
 from src.schemas.underwriting import AssessmentRequest, AssessmentResponse
-from src.services.underwriting_service import run_assessment, get_assessment_history
+from src.services.underwriting_service import run_assessment, run_assessment_streaming, get_assessment_history
 from src.middleware.auth_middleware import get_current_user
 
 router = APIRouter(prefix="/underwriting", tags=["underwriting"])
+
+
+@router.post("/assess-stream")
+async def assess_stream(
+    req: AssessmentRequest = Body(...),
+    user_id: str = Depends(get_current_user),
+):
+    """Stream real-time agent progress as Server-Sent Events."""
+    return StreamingResponse(
+        run_assessment_streaming(req.address, req.postcode, user_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/assess", response_model=AssessmentResponse)

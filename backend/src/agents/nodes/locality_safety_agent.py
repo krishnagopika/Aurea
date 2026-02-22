@@ -22,6 +22,7 @@ Score formula: min(weighted_count / 8, 100)
   → ~800 weighted crime-points → score 100 (very high crime area)
 """
 
+import asyncio
 import httpx
 from datetime import date
 from src.agents.state.assessment_state import AssessmentState
@@ -59,57 +60,118 @@ def _label(score: float) -> str:
     return LABEL_VERY_HIGH
 
 
-async def _fetch_crimes(client: httpx.AsyncClient, lat: float, lon: float) -> tuple[list, str]:
+def _prev_month(year: int, month: int) -> tuple[int, int]:
+    month -= 1
+    if month == 0:
+        month = 12
+        year -= 1
+    return year, month
+
+
+def _build_month_list(year: int, month: int, count: int) -> list[str]:
+    """Build a list of `count` month strings going backwards from year/month."""
+    months = []
+    y, m = year, month
+    for _ in range(count):
+        months.append(f"{y}-{m:02d}")
+        y, m = _prev_month(y, m)
+    return months
+
+
+async def _fetch_one_month(
+    client: httpx.AsyncClient, lat: float, lon: float, month_str: str
+) -> tuple[str, list]:
+    """Fetch crimes for a single month. Returns (month_str, crimes_list)."""
+    try:
+        resp = await client.get(
+            POLICE_API_URL,
+            params={"lat": lat, "lng": lon, "date": month_str},
+            timeout=15.0,
+        )
+        print(f"[LocalitySafetyAgent] {month_str} — HTTP {resp.status_code} {len(resp.content)} bytes")
+        if resp.status_code == 200 and resp.content:
+            crimes = resp.json()
+            if isinstance(crimes, list):
+                print(f"[LocalitySafetyAgent] {month_str} — {len(crimes)} crimes")
+                return month_str, crimes
+    except Exception as e:
+        print(f"[LocalitySafetyAgent] {month_str} — error: {e}")
+    return month_str, []
+
+
+async def _fetch_crimes(client: httpx.AsyncClient, lat: float, lon: float) -> tuple[list, str, str]:
     """
-    Fetch crimes from Police UK API.
-    Tries the most recent 4 months in descending order — the API has a
-    typical 2–3 month publication lag, so current month is often empty.
+    Fetch 12 months of crimes from Police UK API in parallel.
+
+    Step 1 — probe sequentially to find the most recent available month
+              (API has 2–3 month publication lag).
+    Step 2 — fire all 12 months concurrently with asyncio.gather.
 
     Returns:
-      (crimes_list, "YYYY-MM") — first month that returns data
-      ([], last_month_tried)   — if all attempts empty
+      (all_crimes, first_month, last_month)
     """
     today = date.today()
     year, month = today.year, today.month
 
+    # Step 1: find latest available month (sequential — need a confirmed start)
+    latest_year, latest_month = year, month
+    found_start = False
     for _ in range(4):
-        month_str = f"{year}-{month:02d}"
-        print(f"[LocalitySafetyAgent] Querying Police UK API — month={month_str}")
+        month_str = f"{latest_year}-{latest_month:02d}"
+        print(f"[LocalitySafetyAgent] Probing latest available month: {month_str}")
         try:
             resp = await client.get(
                 POLICE_API_URL,
                 params={"lat": lat, "lng": lon, "date": month_str},
                 timeout=15.0,
             )
-            print(f"[LocalitySafetyAgent] HTTP {resp.status_code} — {len(resp.content)} bytes")
             if resp.status_code == 200 and resp.content:
                 crimes = resp.json()
                 if isinstance(crimes, list) and crimes:
-                    print(f"[LocalitySafetyAgent] Got {len(crimes)} crimes for {month_str}")
-                    return crimes, month_str
-                print(f"[LocalitySafetyAgent] Empty results for {month_str} — trying previous month")
+                    print(f"[LocalitySafetyAgent] Latest available: {month_str} ({len(crimes)} crimes)")
+                    found_start = True
+                    break
         except Exception as e:
-            print(f"[LocalitySafetyAgent] Request error for {month_str}: {e}")
+            print(f"[LocalitySafetyAgent] Probe error {month_str}: {e}")
+        latest_year, latest_month = _prev_month(latest_year, latest_month)
 
-        # Step back one month
-        month -= 1
-        if month == 0:
-            month = 12
-            year -= 1
+    if not found_start:
+        print("[LocalitySafetyAgent] Could not find any available month")
+        return [], f"{year}-{month:02d}", f"{year}-{month:02d}"
 
-    print("[LocalitySafetyAgent] All month attempts returned no data")
-    return [], month_str
+    # Step 2: build 12-month list and fetch all in parallel
+    months = _build_month_list(latest_year, latest_month, 12)
+    print(f"[LocalitySafetyAgent] Fetching {len(months)} months in parallel: {months[0]} → {months[-1]}")
+
+    results = await asyncio.gather(
+        *[_fetch_one_month(client, lat, lon, m) for m in months]
+    )
+
+    all_crimes: list = []
+    months_with_data = []
+    for month_str, crimes in results:
+        if crimes:
+            all_crimes.extend(crimes)
+            months_with_data.append(month_str)
+
+    first_month = months[-1] if months else ""
+    last_month = months[0] if months else ""
+    print(f"[LocalitySafetyAgent] Total: {len(all_crimes)} crimes across {len(months_with_data)} months ({first_month} → {last_month})")
+    return all_crimes, first_month, last_month
 
 
 def _score_crimes(crimes: list) -> tuple[float, dict[str, int]]:
-    """Return (score_0_to_100, category_counts_dict)."""
+    """
+    Return (score_0_to_100, category_counts_dict).
+    Divisor scaled for 12 months of data (8 per month × 12 = 96).
+    """
     category_counts: dict[str, int] = {}
     weighted_total = 0.0
     for crime in crimes:
         cat = crime.get("category", "other")
         category_counts[cat] = category_counts.get(cat, 0) + 1
         weighted_total += CATEGORY_WEIGHTS.get(cat, DEFAULT_WEIGHT)
-    score = min(round(weighted_total / 8, 1), 100)
+    score = min(round(weighted_total / 96, 1), 100)
     return score, category_counts
 
 
@@ -137,7 +199,7 @@ async def locality_safety_agent(state: AssessmentState) -> AssessmentState:
     async with httpx.AsyncClient(timeout=20.0) as client:
         print(f"[LocalitySafetyAgent] Tool: Police UK API — crimes near ({lat}, {lon})")
         try:
-            crimes, month_used = await _fetch_crimes(client, lat, lon)
+            crimes, first_month, last_month = await _fetch_crimes(client, lat, lon)
         except Exception as e:
             print(f"[LocalitySafetyAgent] API error: {e}")
             errors.append(f"Locality safety data unavailable: Police UK API error — {e}")
@@ -155,7 +217,7 @@ async def locality_safety_agent(state: AssessmentState) -> AssessmentState:
     if not crimes:
         errors.append("Locality safety: Police UK API returned no crime data for this location.")
         return {
-            "raw_crime_data": {"month": month_used, "count": 0},
+            "raw_crime_data": {"period": "unavailable", "count": 0},
             "locality_safety_score": 25.0,
             "locality_safety_label": LABEL_LOW,
             "locality_safety_reasoning": (
@@ -173,17 +235,23 @@ async def locality_safety_agent(state: AssessmentState) -> AssessmentState:
     top_str = ", ".join(f"{cat.replace('-', ' ')} ({cnt})" for cat, cnt in top)
 
     reasoning = (
-        f"Police UK data ({month_used}): {len(crimes)} recorded crimes near this location. "
+        f"Police UK data ({first_month} to {last_month}, 12 months): "
+        f"{len(crimes)} recorded crimes near this location. "
         f"Top categories: {top_str}. "
         f"Weighted crime score: {score}/100 ({label}). "
         f"Burglary and criminal damage/arson carry the highest weighting as direct insurance risk factors."
     )
 
-    print(f"[LocalitySafetyAgent] Done — {len(crimes)} crimes, score={score}, label={label!r}")
+    print(f"[LocalitySafetyAgent] Done — {len(crimes)} crimes over 12 months, score={score}, label={label!r}")
     print(f"  {reasoning}")
 
     return {
-        "raw_crime_data": {"month": month_used, "count": len(crimes), "categories": category_counts},
+        "raw_crime_data": {
+            "period": f"{first_month} to {last_month}",
+            "months": 12,
+            "count": len(crimes),
+            "categories": category_counts,
+        },
         "locality_safety_score": score,
         "locality_safety_label": label,
         "locality_safety_reasoning": reasoning,

@@ -26,6 +26,7 @@ class AssessmentState(TypedDict, total=False):
     property_type: str
     property_age_risk_score: float           # 0-100
     property_profile_summary: str
+    property_details: Optional[dict]         # structured EPC fields for display
 
     # --- Planning scoring (PropertyValuationAgent) ---
     planning_risk_score: float               # 0-100

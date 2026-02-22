@@ -28,14 +28,33 @@ decommissioned in early 2025 as part of the NaFRA transition. All requests
 return {"error": {"code": 400, ...}}. The EA flood monitoring API remains live.
 """
 
+import json
 import httpx
+from datetime import date, timedelta
 from src.agents.state.assessment_state import AssessmentState
+from src.config.settings import settings
 
 # ---------------------------------------------------------------------------
 # Endpoint constants
 # ---------------------------------------------------------------------------
 PLANNING_DATA_URL = "https://www.planning.data.gov.uk/entity.json"
 EA_FLOOD_WARNINGS_URL = "https://environment.data.gov.uk/flood-monitoring/id/floods"
+IBEX_SEARCH_URL = f"{settings.IBEX_API_URL}/search"
+
+_IBEX_HEADERS = {
+    "Authorization": f"Bearer {settings.IBEX_API_KEY}",
+    "Content-Type": "application/json",
+}
+
+_DATE_FROM = (date.today() - timedelta(days=730)).isoformat()
+_DATE_TO = date.today().isoformat()
+
+# Keywords in planning headings that indicate a flood risk assessment was required
+_FLOOD_KEYWORDS = [
+    "flood risk", "flood plain", "floodplain", "flood assessment",
+    "drainage assessment", "sustainable drainage", "suds",
+    "sequential test", "exception test", "flood zone",
+]
 
 # Search radius (km) for EA live flood warnings
 EA_WARNING_RADIUS_KM = 5
@@ -70,6 +89,70 @@ EA_SEVERITY_LABELS: dict[int, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Tool: IBEX /search — nearby planning apps mentioning flood risk
+# ---------------------------------------------------------------------------
+async def _fetch_ibex_flood_signal(
+    client: httpx.AsyncClient, lat: float, lon: float
+) -> dict:
+    """
+    Query IBEX /search for planning applications within 1km that mention
+    flood risk in their heading/proposal. A high count signals the local
+    planning authority treats this area as flood-sensitive.
+    """
+    body = {
+        "input": {
+            "srid": 4326,
+            "coordinates": [lon, lat],
+            "radius": 500,
+            "date_from": _DATE_FROM,
+            "date_to": _DATE_TO,
+        },
+        "extensions": {
+            "heading": True,
+            "appeals": True,
+            "project_type": True,
+        },
+    }
+    try:
+        resp = await client.post(
+            IBEX_SEARCH_URL,
+            json=body,
+            headers=_IBEX_HEADERS,
+            timeout=15.0,
+        )
+        print(f"[FloodRiskAgent] IBEX /search HTTP {resp.status_code} — {len(resp.content)} bytes")
+        if resp.status_code != 200:
+            print(f"[FloodRiskAgent] IBEX /search error: {resp.text[:200]}")
+            return {"flood_apps": [], "total_nearby": 0}
+        raw = resp.json()
+        print(f"[FloodRiskAgent] IBEX /search RAW JSON:\n{json.dumps(raw, indent=2)}")
+        apps = raw if isinstance(raw, list) else raw.get("applications", raw.get("results", []))
+        total = len(apps) if isinstance(apps, list) else 0
+
+        # Filter apps whose heading/proposal mentions flood-related terms
+        flood_apps = []
+        if isinstance(apps, list):
+            for app in apps:
+                text = (app.get("heading") or app.get("proposal") or "").lower()
+                if any(kw in text for kw in _FLOOD_KEYWORDS):
+                    flood_apps.append({
+                        "reference": app.get("planning_reference"),
+                        "heading": app.get("heading") or app.get("proposal", "")[:120],
+                        "decision": app.get("normalised_decision"),
+                        "council": app.get("council_name"),
+                    })
+
+        print(f"[FloodRiskAgent] IBEX: {len(flood_apps)} flood-related apps out of {total} nearby")
+        for fa in flood_apps[:3]:
+            print(f"[FloodRiskAgent]   → {fa['reference']} | {fa['heading'][:80]}")
+
+        return {"flood_apps": flood_apps, "total_nearby": total}
+    except Exception as e:
+        print(f"[FloodRiskAgent] IBEX /search exception: {e}")
+        return {"flood_apps": [], "total_nearby": 0}
+
+
+# ---------------------------------------------------------------------------
 # Tool: planning.data.gov.uk — Flood Zone (Rivers & Sea)
 # ---------------------------------------------------------------------------
 async def _fetch_flood_zone_entities(
@@ -90,9 +173,13 @@ async def _fetch_flood_zone_entities(
             f"[FloodRiskAgent] planning.data.gov.uk HTTP {resp.status_code} "
             f"— {len(resp.content)} bytes"
         )
-        if resp.status_code != 200 or not resp.content:
+        if resp.status_code != 200 or not resp.content.strip():
             return {}
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as json_err:
+            print(f"[FloodRiskAgent] planning.data.gov.uk JSON parse error: {json_err}")
+            return {}
         entities = data.get("entities", data.get("results", []))
         print(
             f"[FloodRiskAgent] {len(entities) if isinstance(entities, list) else 0} "
@@ -128,9 +215,13 @@ async def _fetch_ea_flood_warnings(
             f"[FloodRiskAgent] EA flood warnings HTTP {resp.status_code} "
             f"— {len(resp.content)} bytes"
         )
-        if resp.status_code != 200 or not resp.content:
+        if resp.status_code != 200 or not resp.content.strip():
             return []
-        data = resp.json()
+        try:
+            data = resp.json()
+        except Exception as json_err:
+            print(f"[FloodRiskAgent] EA warnings JSON parse error: {json_err}")
+            return []
         items = data.get("items", [])
         # Filter out expired warnings
         active = [
@@ -240,12 +331,14 @@ async def flood_risk_agent(state: AssessmentState) -> AssessmentState:
         }
 
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-        # Run both lookups
         print(f"[FloodRiskAgent] Tool 1: planning.data.gov.uk flood-risk-zone at ({lat}, {lon})")
         zone_data = await _fetch_flood_zone_entities(client, lat, lon)
 
         print(f"[FloodRiskAgent] Tool 2: EA flood warnings within {EA_WARNING_RADIUS_KM}km of ({lat}, {lon})")
         warnings = await _fetch_ea_flood_warnings(client, lat, lon)
+
+        print(f"[FloodRiskAgent] Tool 3: IBEX /search — flood-related planning apps within 1km")
+        ibex_flood = await _fetch_ibex_flood_signal(client, lat, lon)
 
     # ---- Flood Zone (Rivers & Sea) ----------------------------------------
     zone = _parse_zone(zone_data)
@@ -290,8 +383,18 @@ async def flood_risk_agent(state: AssessmentState) -> AssessmentState:
         elif min_severity == 3:
             warning_uplift = 10
 
-    final_score = min(100.0, base_score + warning_uplift)
-    print(f"[FloodRiskAgent] Score: base={base_score} + warning_uplift={warning_uplift} = {final_score}")
+    # IBEX planning signal uplift — flood risk assessments required by planners nearby
+    flood_apps = ibex_flood.get("flood_apps", [])
+    ibex_uplift = 0
+    if len(flood_apps) >= 5:
+        ibex_uplift = 15
+    elif len(flood_apps) >= 2:
+        ibex_uplift = 8
+    elif len(flood_apps) == 1:
+        ibex_uplift = 4
+
+    final_score = min(100.0, base_score + warning_uplift + ibex_uplift)
+    print(f"[FloodRiskAgent] Score: base={base_score} + warning_uplift={warning_uplift} + ibex_uplift={ibex_uplift} = {final_score}")
 
     # ---- Build reasoning (CYLTFR-style) ------------------------------------
     cyltfr_risk_types = (
@@ -327,10 +430,23 @@ async def flood_risk_agent(state: AssessmentState) -> AssessmentState:
         "https://check-long-term-flood-risk.service.gov.uk for all four flood sources."
     )
 
+    if flood_apps:
+        ibex_reasoning = (
+            f"\nPlanning Signal (IBEX): {len(flood_apps)} nearby planning application(s) "
+            f"within 1 km required a flood risk assessment — indicating the local planning "
+            f"authority considers this area flood-sensitive. Score uplift of +{ibex_uplift} applied."
+        )
+    else:
+        ibex_reasoning = (
+            f"\nPlanning Signal (IBEX): No nearby planning applications within 1 km "
+            f"required a flood risk assessment."
+        )
+
     reasoning = (
         f"{cyltfr_risk_types}\n\n"
         f"{zone_reasoning}"
         f"{warning_reasoning}"
+        f"{ibex_reasoning}"
         f"{sw_note}\n\n"
         f"Overall flood risk score: {final_score}/100."
     )
@@ -355,6 +471,12 @@ async def flood_risk_agent(state: AssessmentState) -> AssessmentState:
         "surface_water": {"note": "See CYLTFR service for RoFSW data"},
         "groundwater": {"note": "See CYLTFR service for groundwater risk"},
         "reservoirs": {"note": "See CYLTFR service for reservoir inundation zones"},
+        "ibex_planning_signal": {
+            "flood_related_apps_within_1km": len(flood_apps),
+            "total_apps_within_1km": ibex_flood.get("total_nearby", 0),
+            "score_uplift": ibex_uplift,
+            "apps": flood_apps[:5],
+        },
     }
 
     print(f"[FloodRiskAgent] Done — zone={zone!r} final_score={final_score}")
