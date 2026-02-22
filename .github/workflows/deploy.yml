@@ -67,7 +67,7 @@ jobs:
             # Clone or pull latest code
             if [ -d /opt/aurea ]; then
               echo "Pulling latest code..."
-              cd /opt/aurea && sudo git pull
+              sudo git -C /opt/aurea pull
             else
               echo "Cloning repo..."
               sudo git clone https://github.com/krishnagopika/Aurea.git /opt/aurea
@@ -76,7 +76,8 @@ jobs:
             cd /opt/aurea
 
             # Fetch .env from S3 using EC2 IAM role
-            aws s3 cp s3://aurea-config-hacklondon/backend.env /opt/aurea/backend/.env
+            # sudo -E preserves environment so IMDSv2 role credentials are passed through
+            sudo -E aws s3 cp s3://aurea-config-hacklondon/backend.env /opt/aurea/backend/.env
             echo ".env fetched from S3"
 
             # Build and restart containers
