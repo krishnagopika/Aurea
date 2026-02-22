@@ -23,32 +23,42 @@ jobs:
           script: |
             set -euo pipefail
 
-            # Install Docker using the universal convenience script (works on AL2/AL2023/Ubuntu/Debian)
+            # Detect package manager (Amazon Linux 2=yum, AL2023=dnf, Ubuntu=apt-get)
+            if command -v dnf &>/dev/null; then
+              PKG="dnf"
+            elif command -v yum &>/dev/null; then
+              PKG="yum"
+            elif command -v apt-get &>/dev/null; then
+              PKG="apt-get"
+            else
+              echo "No supported package manager found"; exit 1
+            fi
+            echo "Package manager: $PKG"
+
+            # Install Docker via native package manager (avoids get.docker.com which blocks amzn)
             if ! command -v docker &>/dev/null; then
               echo "Installing Docker..."
-              curl -fsSL https://get.docker.com | sudo sh
+              sudo $PKG install -y docker git
               sudo systemctl enable --now docker
               sudo usermod -aG docker ec2-user
             fi
 
-            # Install Docker Compose V2 plugin if not present
-            if ! sudo docker compose version &>/dev/null 2>&1; then
-              echo "Installing Docker Compose V2 plugin..."
-              sudo mkdir -p /usr/local/lib/docker/cli-plugins
-              sudo curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
-                   -o /usr/local/lib/docker/cli-plugins/docker-compose
-              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            # Install AWS CLI if missing
+            if ! command -v aws &>/dev/null; then
+              if [ "$PKG" = "apt-get" ]; then
+                sudo apt-get install -y awscli
+              else
+                sudo $PKG install -y aws-cli awscli 2>/dev/null || true
+              fi
             fi
 
-            # Install git and aws-cli if missing
-            if ! command -v git &>/dev/null; then
-              if command -v apt-get &>/dev/null; then
-                sudo apt-get install -y git awscli
-              elif command -v yum &>/dev/null; then
-                sudo yum install -y git awscli
-              elif command -v dnf &>/dev/null; then
-                sudo dnf install -y git aws-cli
-              fi
+            # Install Docker Compose V2 plugin (standalone binary — works on all distros)
+            if ! sudo docker compose version &>/dev/null 2>&1; then
+              echo "Installing Docker Compose V2..."
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+                   -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
             fi
 
             echo "Docker: $(sudo docker --version)"
