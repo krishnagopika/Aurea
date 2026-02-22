@@ -1,0 +1,68 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 600s
+          script: |
+            set -euo pipefail
+
+            # Install Docker if not present
+            if ! command -v docker &>/dev/null; then
+              echo "Installing Docker..."
+              sudo dnf update -y
+              sudo dnf install -y docker git aws-cli
+              sudo systemctl enable --now docker
+              sudo usermod -aG docker ec2-user
+            fi
+
+            # Install Docker Compose V2 plugin if not present
+            if ! docker compose version &>/dev/null; then
+              echo "Installing Docker Compose..."
+              sudo mkdir -p /usr/local/lib/docker/cli-plugins
+              sudo curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+                   -o /usr/local/lib/docker/cli-plugins/docker-compose
+              sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+            fi
+
+            echo "Docker: $(docker --version)"
+            echo "Compose: $(docker compose version)"
+
+            # Clone or pull latest code
+            if [ -d /opt/aurea ]; then
+              echo "Pulling latest code..."
+              cd /opt/aurea && sudo git pull
+            else
+              echo "Cloning repo..."
+              sudo git clone https://github.com/krishnagopika/Aurea.git /opt/aurea
+              cd /opt/aurea
+            fi
+
+            cd /opt/aurea
+
+            # Fetch .env from S3 using EC2 IAM role
+            aws s3 cp s3://aurea-config-hacklondon/backend.env /opt/aurea/backend/.env
+            echo ".env fetched from S3"
+
+            # Build and restart containers
+            sudo docker compose down --remove-orphans || true
+            sudo docker compose up -d --build
+
+            echo "=== Deployed successfully ==="
+            sudo docker compose ps
