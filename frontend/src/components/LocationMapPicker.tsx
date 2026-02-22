@@ -116,6 +116,17 @@ export default function LocationMapPicker({ onLocationSelect, initialLat = 51.50
 
       if (!mapContainerRef.current) return
 
+      // Guard against React StrictMode double-invoke: if the container already
+      // has a Leaflet instance attached, skip re-initialisation.
+      if (mapContainerRef.current.dataset.leafletInitialised === 'true') return
+      mapContainerRef.current.dataset.leafletInitialised = 'true'
+
+      // UK bounding box — used only to restrict pin placement, not panning
+      const UK_BOUNDS = L.latLngBounds(
+        L.latLng(49.5, -8.2),   // SW corner (SW of Cornwall)
+        L.latLng(61.0, 2.2),    // NE corner (Shetland)
+      )
+
       const map = L.map(mapContainerRef.current).setView([initialLat, initialLon], 13)
 
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -127,10 +138,17 @@ export default function LocationMapPicker({ onLocationSelect, initialLat = 51.50
 
       marker.on('dragend', () => {
         const pos = marker.getLatLng()
+        if (!UK_BOUNDS.contains(pos)) {
+          // Snap marker back to last valid UK position
+          marker.setLatLng(markerRef.current?._latlng ?? UK_BOUNDS.getCenter())
+          return
+        }
         reverseAndNotify(pos.lat, pos.lng)
       })
 
       map.on('click', (e: { latlng: { lat: number; lng: number } }) => {
+        // Only place pin if click is within UK
+        if (!UK_BOUNDS.contains(e.latlng)) return
         marker.setLatLng([e.latlng.lat, e.latlng.lng])
         reverseAndNotify(e.latlng.lat, e.latlng.lng)
       })
@@ -144,6 +162,9 @@ export default function LocationMapPicker({ onLocationSelect, initialLat = 51.50
         mapRef.current.remove()
         mapRef.current = null
         markerRef.current = null
+      }
+      if (mapContainerRef.current) {
+        mapContainerRef.current.dataset.leafletInitialised = 'false'
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -20,6 +20,7 @@ import {
   XCircle,
   Search,
   Map,
+  Building2,
 } from 'lucide-react'
 import Navbar from '@/components/Navbar'
 import DecisionBadge from '@/components/DecisionBadge'
@@ -28,7 +29,7 @@ import RiskScoreBar from '@/components/RiskScoreBar'
 import AgentPipelineStatus, { type Agent, type AgentStatus } from '@/components/AgentPipelineStatus'
 import TypingNarrative from '@/components/TypingNarrative'
 import { Button } from '@/components/ui/button'
-import { runAssessment, type UnderwritingDecision, ApiError } from '@/lib/api'
+import { runAssessmentStream, type UnderwritingDecision, ApiError } from '@/lib/api'
 import type { PickedLocation } from '@/components/LocationMapPicker'
 
 // Dynamic import — Leaflet reads `window` on load, breaks SSR
@@ -259,22 +260,6 @@ export default function AssessPage() {
     validatePostcode(postcode)
   }
 
-  // ── Simulate agent progress in parallel with real API call ────────────────
-  const simulateAgentProgress = async () => {
-    setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'pending' as AgentStatus })))
-    setPipelineVisible(true)
-
-    for (let i = 0; i < INITIAL_AGENTS.length; i++) {
-      setAgents((prev) =>
-        prev.map((a, idx) => (idx === i ? { ...a, status: 'running' as AgentStatus } : a)),
-      )
-      await new Promise<void>((resolve) => setTimeout(resolve, 900 + Math.random() * 400))
-      setAgents((prev) =>
-        prev.map((a, idx) => (idx === i ? { ...a, status: 'complete' as AgentStatus } : a)),
-      )
-    }
-  }
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     if (!token) return
@@ -294,7 +279,6 @@ export default function AssessPage() {
     }
 
     if (postcodeValid === null) {
-      // Hasn't been validated yet — run sync regex check before blocking
       if (!UK_POSTCODE_REGEX.test(postcode.trim())) {
         setError('Please enter a valid UK postcode before submitting.')
         return
@@ -302,17 +286,28 @@ export default function AssessPage() {
     }
 
     setLoading(true)
-
-    // Fire agent simulation (non-blocking)
-    simulateAgentProgress()
+    setAgents(INITIAL_AGENTS.map((a) => ({ ...a, status: 'pending' as AgentStatus })))
+    setPipelineVisible(true)
 
     try {
-      const assessment = await runAssessment(
+      await runAssessmentStream(
         address.trim(),
         postcode.trim().toUpperCase(),
         token,
+        (event) => {
+          if (event.type === 'agent_start') {
+            setAgents((prev) =>
+              prev.map((a) => (a.id === event.agent ? { ...a, status: 'running' as AgentStatus } : a)),
+            )
+          } else if (event.type === 'agent_end') {
+            setAgents((prev) =>
+              prev.map((a) => (a.id === event.agent ? { ...a, status: 'complete' as AgentStatus } : a)),
+            )
+          } else if (event.type === 'result') {
+            setResult(event.data)
+          }
+        },
       )
-      setResult(assessment)
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === 401) {
@@ -671,6 +666,47 @@ export default function AssessPage() {
                       </span>
                     </div>
                   </div>
+
+                  {/* ── Property Details (EPC) ── */}
+                  {result.property_details && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.1, duration: 0.4 }}
+                      className="rounded-2xl bg-white border border-slate-200 shadow-sm p-6"
+                    >
+                      <div className="flex items-center gap-2 mb-4">
+                        <Building2 className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                        <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-widest">
+                          Property Details
+                        </h2>
+                        <span className="ml-auto text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+                          EPC Register
+                        </span>
+                      </div>
+                      <dl className="grid grid-cols-2 gap-x-6 gap-y-3">
+                        {([
+                          ['Type', result.property_details.property_type],
+                          ['Built form', result.property_details.built_form],
+                          ['Age band', result.property_details.age_band.replace('England and Wales: ', '')],
+                          ['EPC rating', result.property_details.epc_rating],
+                          ['Floor area', result.property_details.floor_area_m2 != null ? `${result.property_details.floor_area_m2} m²` : null],
+                          ['Habitable rooms', result.property_details.habitable_rooms != null ? String(result.property_details.habitable_rooms) : null],
+                          ['Walls', result.property_details.wall_type],
+                          ['Roof', result.property_details.roof_type],
+                          ['Glazing', result.property_details.glazing],
+                          ['Heating', result.property_details.heating],
+                        ] as [string, string | null][])
+                          .filter(([, v]) => v && v !== 'unknown')
+                          .map(([label, value]) => (
+                            <div key={label}>
+                              <dt className="text-[11px] text-slate-400 font-medium uppercase tracking-wide">{label}</dt>
+                              <dd className="text-sm text-slate-700 font-medium mt-0.5 leading-snug">{value}</dd>
+                            </div>
+                          ))}
+                      </dl>
+                    </motion.div>
+                  )}
 
                   {/* ── Risk Breakdown ── */}
                   <motion.div

@@ -35,6 +35,21 @@ export interface RiskFactor {
   reasoning: string
 }
 
+export interface PropertyDetails {
+  property_type: string        // House, Flat, Maisonette, Bungalow
+  built_form: string           // Detached, Semi-Detached, Terraced, End-Terrace
+  age_band: string             // e.g. "England and Wales: 1967-1975"
+  epc_rating: string           // A–G
+  floor_area_m2: number | null
+  habitable_rooms: number | null
+  wall_type: string            // e.g. "Cavity wall, as built, no insulation"
+  roof_type: string
+  floor_type: string
+  glazing: string              // "double glazing", "single glazing"
+  heating: string
+  confirmed_address: string
+}
+
 export interface UnderwritingDecision {
   assessment_id?: string
   decision: 'ACCEPT' | 'REFER' | 'DECLINE'
@@ -44,6 +59,7 @@ export interface UnderwritingDecision {
   risk_factors?: RiskFactor[]
   policy_citations: string[]
   data_warnings: string[]
+  property_details?: PropertyDetails | null
   created_at?: string
   address?: string
   postcode?: string
@@ -77,6 +93,7 @@ interface RawAssessmentResponse {
   plain_english_narrative: string
   data_warnings: string[]
   policy_citations?: string[]
+  property_details?: PropertyDetails | null
   address?: string
   postcode?: string
 }
@@ -105,6 +122,7 @@ function transformAssessment(raw: RawAssessmentResponse): UnderwritingDecision {
     risk_factors: raw.risk_factors ?? [],
     policy_citations: raw.policy_citations ?? [],
     data_warnings: raw.data_warnings ?? [],
+    property_details: raw.property_details ?? null,
     address: raw.address,
     postcode: raw.postcode,
   }
@@ -153,6 +171,86 @@ export async function login(email: string, password: string): Promise<AuthRespon
 }
 
 // ─── Underwriting ─────────────────────────────────────────────────────────────
+
+export type PipelineEvent =
+  | { type: 'agent_start'; agent: string }
+  | { type: 'agent_end'; agent: string }
+  | { type: 'result'; data: UnderwritingDecision }
+  | { type: 'error'; message: string }
+
+/**
+ * Stream real-time agent events via SSE (POST with ReadableStream).
+ * Calls onEvent for each parsed SSE event, resolves with the final result.
+ */
+export async function runAssessmentStream(
+  address: string,
+  postcode: string,
+  token: string,
+  onEvent: (event: PipelineEvent) => void,
+): Promise<UnderwritingDecision> {
+  const res = await fetch(`${BASE}/api/v1/underwriting/assess-stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ address, postcode }),
+  })
+
+  if (!res.ok) {
+    let body: unknown
+    try { body = await res.json() } catch { body = await res.text() }
+    const message =
+      typeof body === 'object' && body !== null && 'detail' in body
+        ? String((body as { detail: unknown }).detail)
+        : `HTTP ${res.status}`
+    throw new ApiError(res.status, message, body)
+  }
+
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finalResult: UnderwritingDecision | null = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    // Process complete lines
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? '' // keep incomplete last line
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      const raw = line.slice(6).trim()
+      if (raw === '[DONE]') break
+
+      try {
+        const payload = JSON.parse(raw) as {
+          type: string
+          agent?: string
+          data?: RawAssessmentResponse
+          message?: string
+        }
+
+        if (payload.type === 'agent_start' || payload.type === 'agent_end') {
+          onEvent({ type: payload.type, agent: payload.agent! })
+        } else if (payload.type === 'result' && payload.data) {
+          finalResult = transformAssessment(payload.data)
+          onEvent({ type: 'result', data: finalResult })
+        } else if (payload.type === 'error') {
+          onEvent({ type: 'error', message: payload.message ?? 'Unknown error' })
+        }
+      } catch {
+        // malformed JSON line — skip
+      }
+    }
+  }
+
+  if (!finalResult) throw new ApiError(500, 'Stream ended without a result')
+  return finalResult
+}
 
 export async function runAssessment(
   address: string,
