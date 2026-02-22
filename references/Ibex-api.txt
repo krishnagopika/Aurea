@@ -1,0 +1,250 @@
+
+Guides
+
+Copy Page
+Test
+Ibex API Developer Guide 
+Welcome to the Ibex API - your comprehensive solution for accessing UK planning application data.
+What is Ibex API? 
+Ibex API is a comprehensive solution for accessing UK planning applications and property data. The API enables developers to build applications that require real-time access to planning and development data across the UK.
+Key Features 
+Planning Applications Search & Applications 
+Search by Location: Find planning applications within a specified radius or polygon boundary
+Search by Attributes: Retrieve planning applications filtered by council ID, date ranges, and various application attributes
+Data Extensions: Request minimal data for speed when needed, or comprehensive data with additional metadata including heading, project_type, appeals, document_metadata, and extracted application form data
+Flexible Filters: Filter by normalised_decision, keywords, normalised_application_type, project_type, and num_new_houses
+Available Endpoints 
+Endpoint	Description
+/search	Search planning applications by location
+/applications	Search planning applications by date range and council
+/stats	Get council planning statistics
+Search Endpoint 
+Extensions 
+Extension	Description
+appeals	Include planning appeal information with applications
+centre_point	Include centre point of the geometry
+heading	Include application heading/summary information
+project_type	Include categorized project type classification
+unlimited_radius	Allow search radius beyond 500m limit
+num_new_houses	Include number of new houses from extraction classifier
+document_metadata	Include document metadata (date published, document type, description, link)
+proposed_unit_mix	Include residential unit breakdown from extracted application forms
+proposed_floor_area	Include floor area data from extracted application forms
+num_comments_received	Include number of public comments received
+Filters 
+Filter	Description
+normalised_application_type	Filter by standardized application types
+project_type	Filter by project categories
+normalised_decision	Filter by decision status
+num_new_houses	Filter by number of new houses (min/max)
+Request Schema 
+{
+    "input": {
+        "srid": 4326,
+        "coordinates": [-0.1278, 51.5074],
+        "radius": 100,
+        "date_from": "2024-01-01",
+        "date_to": "2025-01-01"
+    },
+    "extensions": {
+        "appeals": true,
+        "centre_point": true,
+        "heading": true,
+        "project_type": true,
+        "num_new_houses": true,
+        "document_metadata": true,
+        "proposed_unit_mix": true,
+        "proposed_floor_area": true,
+        "num_comments_received": true
+    },
+    "filters": {
+        "normalised_decision": ["Approved"],
+        "normalised_application_type": ["full planning application"]
+    }
+}
+json
+Input Parameters 
+Parameter	Type	Required	Description
+srid	number	Yes	Spatial Reference ID (4326 for WGS84, 27700 for British National Grid)
+coordinates	[number, number]	Yes*	Longitude/Latitude or Easting/Northing
+radius	number	Yes*	Search radius in meters
+polygon	number[][]	Yes*	Polygon coordinates (alternative to radius search)
+date_from	string	Yes	Start date (YYYY-MM-DD)
+date_to	string	Yes	End date (YYYY-MM-DD)
+date_range_type	string	No	"validated", "decided", or "any" (default: "any")
+page	number	No	Page number for pagination
+page_size	number	No	Results per page
+*Either coordinates + radius or polygon is required.
+Applications Endpoint 
+Extensions 
+Extension	Description
+appeals	Include planning appeal information with applications
+heading	Include application heading/summary information
+project_type	Include categorized project type classification
+num_new_houses	Include number of new houses from extraction classifier
+document_metadata	Include document metadata (date published, document type, description, link)
+proposed_unit_mix	Include residential unit breakdown from extracted application forms
+proposed_floor_area	Include floor area data from extracted application forms
+num_comments_received	Include number of public comments received
+Filters 
+Filter	Description
+normalised_application_type	Filter by standardized application types
+keywords	Filter applications by keywords in proposal text
+normalised_decision	Filter by decision status
+num_new_houses	Filter by number of new houses (min/max)
+Request Schema 
+{
+    "input": {
+        "date_from": "2024-01-01",
+        "date_to": "2025-01-01",
+        "council_id": [1, 2, 3]
+    },
+    "extensions": {
+        "appeals": true,
+        "heading": true,
+        "project_type": true,
+        "num_new_houses": true,
+        "document_metadata": true,
+        "proposed_unit_mix": true,
+        "proposed_floor_area": true,
+        "num_comments_received": true
+    },
+    "filters": {
+        "normalised_decision": ["Approved"]
+    }
+}
+json
+Input Parameters 
+Parameter	Type	Required	Description
+date_from	string	Yes	Start date (YYYY-MM-DD)
+date_to	string	Yes	End date (YYYY-MM-DD)
+date_range_type	string	No	"validated", "decided", or "any" (default: "any")
+council_id	number[]	No	Filter by council IDs
+page	number	No	Page number for pagination
+page_size	number	No	Results per page
+Stats Endpoint 
+The stats endpoint provides council-level planning statistics and performance metrics.
+Request Schema 
+{
+    "input": {
+        "council_id": 1,
+        "date_from": "2024-01-01",
+        "date_to": "2025-01-01"
+    }
+}
+json
+Extension Details 
+proposed_unit_mix 
+Returns residential unit breakdown from extracted application forms:
+{
+    "proposed_unit_mix": {
+        "total_existing_residential_units": 0,
+        "total_proposed_residential_units": 12,
+        "proposed_1_bed_units": 4,
+        "proposed_2_bed_units": 5,
+        "proposed_3_bed_units": 2,
+        "proposed_4_plus_bed_units": 1,
+        "affordable_housing_units": 3
+    }
+}
+json
+proposed_floor_area 
+Returns floor area data from extracted application forms:
+{
+    "proposed_floor_area": {
+        "gross_internal_area_to_add_sqm": 150.5,
+        "existing_gross_floor_area_sqm": 200.0,
+        "proposed_gross_floor_area_sqm": 350.5,
+        "floor_area_to_be_lost_sqm": 0,
+        "floor_area_to_be_gained_sqm": 150.5
+    }
+}
+json
+num_comments_received 
+Returns the number of public comments received on an application:
+{
+    "num_comments_received": 5
+}
+json
+document_metadata 
+Returns metadata about documents associated with the application:
+{
+    "document_metadata": [
+        {
+            "date_published": "2024-01-15",
+            "document_type": "APPLICATION_FORM",
+            "description": "Application Form",
+            "document_link": "https://..."
+        }
+    ]
+}
+json
+Response Schema 
+All endpoints return applications with the following base fields:
+Field	Type	Description
+council_id	number	Council identifier
+council_name	string	Council name
+planning_reference	string	Planning application reference
+url	string	Link to application on council website
+proposal	string	Description of the proposed development
+raw_address	string	Site address
+raw_application_type	string	Original application type from council
+normalised_application_type	string	Standardized application type
+application_date	string	Date application was validated
+decided_date	string	Date decision was made
+raw_decision	string	Original decision text from council
+normalised_decision	string	Standardized decision (Approved, Refused, etc.)
+geometry	string	WKT geometry of site location
+Additional fields are included based on requested extensions.
+Data Coverage 
+Geographic Scope: Complete UK coverage including England, Scotland, Wales, and Northern Ireland
+Historical Data: Applications dating back multiple years depending on local authority
+Update Frequency: Regular updates from local planning authorities
+Data Quality: Validated and normalized data with consistent formatting
+Support & Documentation 
+API Reference: Complete parameter and response specifications
+Support: Dedicated developer support for integration assistance - please contact support@ibexenterprise.com
+Next
+Ibex API Usage Guide
+On This Page
+
+Ibex API Developer Guide
+What is Ibex API?
+Key Features
+Planning Applications Search & Applications
+Available Endpoints
+Search Endpoint
+Extensions
+Filters
+Request Schema
+Input Parameters
+Applications Endpoint
+Extensions
+Filters
+Request Schema
+Input Parameters
+Stats Endpoint
+Request Schema
+Extension Details
+proposed_unit_mix
+proposed_floor_area
+num_comments_received
+document_metadata
+Response Schema
+Data Coverage
+Support & Documentation
+
+Search...
+
+Ibex API Developer Guide
+
+Ibex API Usage Guide
+
+Map Integration Guide
+
+Property Filtering Guide
+
+Daily Sync Guide
+
+Guides
+API Reference
