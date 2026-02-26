@@ -1,4 +1,4 @@
-# Aurea — AI-Powered Residential Insurance Underwriting
+# Aurea — AI-Powered Residential Insurance Risk Score Assesment
 
 Aurea is a multi-agent AI system that automates the underwriting of UK residential property insurance. Given a property address and postcode, Aurea runs a parallel pipeline of specialised agents — each pulling from a different authoritative data source — to produce a risk score, a premium multiplier, and a plain-English decision (accept / refer / decline) within seconds.
 
@@ -13,8 +13,6 @@ Traditional home insurance underwriting is slow, manual, and inconsistent. Under
 **Aurea solves this by automating the entire data collection and decision pipeline** using a graph of specialised AI agents, each responsible for a single risk dimension, coordinated by a Claude-powered LLM synthesis layer.
 
 ---
-
-[live demo] (http://ec2-18-208-224-149.compute-1.amazonaws.com)
 
 ## Architecture Overview
 
