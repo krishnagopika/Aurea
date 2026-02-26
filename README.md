@@ -286,38 +286,7 @@ cd aurea
 
 ### 2. Configure environment variables
 
-Create `backend/.env`:
-
-```env
-# MongoDB
-MONGO_USER=your_mongo_user
-MONGODB_PASSWORD=your_mongo_password
-MONGO_CLUSTER=your-cluster.mongodb.net
-MONGO_APPNAME=aurea
-MONGO_DB=aurea
-
-# AWS Bedrock
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=your_aws_key
-AWS_SECRET_ACCESS_KEY=your_aws_secret
-BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-6
-BEDROCK_EMBED_MODEL_ID=amazon.titan-embed-text-v2:0
-
-# IBEX Planning API (Serac Technologies)
-IBEX_API_URL=https://ibex.seractech.co.uk
-IBEX_API_KEY=your_ibex_key
-
-# EPC Open Data API (MHCLG)
-# Key is your email:password encoded as Base64
-EPC_API_URL=https://epc.opendatacommunities.org
-EPC_API_KEY=your_base64_encoded_credentials
-
-# JWT (change in production)
-JWT_SECRET_KEY=change_me_in_production
-
-# CORS (comma-separated origins, or * for development)
-ALLOW_ORIGINS=http://localhost:3000
-```
+Create `backend/.env`
 
 ### 3. Start the backend
 
