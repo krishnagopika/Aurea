@@ -2,7 +2,7 @@
 
 Aurea is a multi-agent AI system that automates the underwriting of UK residential property insurance. Given a property address and postcode, Aurea runs a parallel pipeline of specialised agents — each pulling from a different authoritative data source — to produce a risk score, a premium multiplier, and a plain-English decision (accept / refer / decline) within seconds.
 
-Built at Hack London 2025.
+Built at Hack London 2026.
 
 ---
 
